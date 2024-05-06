@@ -1,5 +1,6 @@
 import logging
 import sys
+#logging.basicConfig(level=logging.DEBUG)
 
 def get_logger():
     # Create a logger object

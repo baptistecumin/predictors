@@ -1,0 +1,4 @@
+Given an input, submit your answer for these tasks. {% for task in tasks %}
+<task>{{ task.name }} : {{ task.description }}. {% if 'class' in task %} Possible labels: {% for class in task.classes %} 
+<label>"{{ class.name }}" : {{ class.description }}</label> {% endfor %} {% endif %} </task> {% endfor %} 
+input: {{ input }}

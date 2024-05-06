@@ -1,5 +1,0 @@
-Categorize inputs into classes with a set of possible labels. {% for task in classifier_tasks %}
-<classify>{{ task.name }} : {{ task.description }}. Possible labels: {% for class in task.classes %} 
-<label>"{{ class.name }}" : {{ class.description }}</label> {% endfor %}</classify> {% endfor %}
-For example: {% for example in few_shot_examples %} 
-"{{ example.input }}" : {{ example.label }} {% endfor %}
