@@ -1,21 +1,21 @@
 import os
 from modal import App, Image, method
 from datetime import datetime
+import dotenv
+dotenv.load_dotenv()
 
 image = (
     Image
     .debian_slim(python_version="3.10")
     .apt_install("git", "git-lfs")
     .pip_install("unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git")
-    .pip_install("torch")
+    .pip_install("torch", "python-dotenv") # for HF_ACCESS_TOKEN
 )
 
 app = App(
     "train-peft",
     image=image,
 )
-
-HF_ACCESS_TOKEN = os.getenv("HF_ACCESS_TOKEN")
 
 
 @app.cls(gpu='T4', container_idle_timeout=240, image=image)
@@ -31,9 +31,10 @@ class FinetunedClassifier:
     ### Closest label:
     {}"""
 
-    def __init__(self, base_model_name, finetuned_model_name):
+    def __init__(self, base_model_name, finetuned_model_name, hf_access_token):
         self.model_name = base_model_name
         self.finetuned_model_name = finetuned_model_name
+        self.hf_access_token = hf_access_token
 
     @method()
     def train(self):
@@ -49,7 +50,7 @@ class FinetunedClassifier:
             max_seq_length=2048,
             dtype=torch.float16,
             load_in_4bit=True,
-            token=HF_ACCESS_TOKEN    
+            token=self.hf_access_token    
         )
         model = FastLanguageModel.get_peft_model(
             model,
@@ -111,11 +112,10 @@ class FinetunedClassifier:
         return inner_formatting_prompts_func
 
     @method()
-    def inference(self):
-        """Run inference to classify input texts."""
-        from datasets import load_dataset
+    def inference(self, texts, vocabularies):
+        """Run inference to classify input texts"""
         from unsloth import FastLanguageModel
-
+        from datasets import Dataset
         def predict_category(prompted_inputs):
             inputs = tokenizer(prompted_inputs, padding=True, truncation=True, return_tensors="pt").to("cuda")
             outputs = model.generate(**inputs, max_new_tokens=10, use_cache=True)
@@ -124,15 +124,15 @@ class FinetunedClassifier:
         
         model, tokenizer = self.load_from_hub()
         FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
-        inference_dataset = load_dataset("mjrdbds/classifiers-finetuning-060525", split="train[:10%]")
-        prompted_input = inference_dataset.map(self.formatting_prompts_func(self.classification_prompt, tokenizer.eos_token), batched=True)
+        dataset = Dataset.from_dict({"input": texts, "vocabulary": vocabularies})
+        prompted_input = dataset.map(self.formatting_prompts_func(self.classification_prompt, tokenizer.eos_token), batched=True)
         output = prompted_input.map(lambda batch: predict_category(batch['text']), batched=True, batch_size=4)
         return output.to_dict()
 
     def save_to_hub(self, model, tokenizer):
         """Save the model and tokenizer to Hugging Face's Model Hub."""
-        model.push_to_hub(self.finetuned_model_name, token=HF_ACCESS_TOKEN)
-        tokenizer.push_to_hub(self.finetuned_model_name, token=HF_ACCESS_TOKEN)
+        model.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
+        tokenizer.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
 
     def load_from_hub(self):
         """Load the model and tokenizer from Hugging Face's Model Hub."""
@@ -143,7 +143,7 @@ class FinetunedClassifier:
             max_seq_length=2048,
             dtype=torch.float16,
             load_in_4bit=True,
-            token=HF_ACCESS_TOKEN    
+            token=self.hf_access_token    
         )
         return model, tokenizer
 
@@ -153,7 +153,13 @@ def starter():
     finetuned_model_name = f"mjrdbds/llama3-4b-classifierunsloth-{current_date}-lora"
     t = FinetunedClassifier(
         base_model_name="unsloth/llama-3-8b-bnb-4bit",
-        finetuned_model_name=finetuned_model_name)
+        finetuned_model_name=finetuned_model_name,
+        hf_access_token=os.getenv("HF_ACCESS_TOKEN")
+    )
     #t.train.remote()
-    inference = t.inference.remote()
+    inference_dataset = {
+        'texts': ['this is an antique table very nice yay', 'A painting for use'],
+        'vocabularies': [['table', 'painting'], ['table', 'painting']]
+    }
+    inference = t.inference.remote(**inference_dataset)
     print(inference)
