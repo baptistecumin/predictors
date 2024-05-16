@@ -164,7 +164,7 @@ class FineTunedFewShotPredictor(BasePredictor):
 
 class EmbeddingPredictor():
     """
-    Define a prompt. 
+    Prompted embeddings. Not currently used.
     """
 
     # from InstructorEmbedding import INSTRUCTOR
