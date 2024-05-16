@@ -1,3 +1,9 @@
+"""
+TODO:
+- Deploy the app to a web endpoint, to allow it to be queried
+- Do this from within python. Have the train() command in predictors for finetuning kick off a job. 
+
+"""
 import os
 from modal import App, Image, method
 from datetime import datetime
@@ -37,9 +43,9 @@ class FinetunedClassifier:
         self.hf_access_token = hf_access_token
 
     @method()
-    def train(self):
-        """Train the model."""
-        from datasets import load_dataset
+    def train(self, dataset):
+        """Train the model. Dataset can either be a string, interpreted as a huggingface dataset, or a dict."""
+        from datasets import load_dataset, Dataset
         from trl import SFTTrainer
         from transformers import TrainingArguments
         from unsloth import FastLanguageModel
@@ -66,8 +72,12 @@ class FinetunedClassifier:
             use_rslora = False,  # We support rank stabilized LoRA
             loftq_config = None, # And LoftQ
         )        
+        
+        if type(dataset) == str:
+            dataset = load_dataset(dataset, split="train")
+        else:
+            dataset = Dataset.from_dict(dataset)
 
-        dataset = load_dataset("mjrdbds/classifiers-finetuning-060525", split="train[:10%]")
         dataset = dataset.map(self.formatting_prompts_func(self.classification_prompt, tokenizer.eos_token), batched=True)
 
         # Configure training
@@ -112,10 +122,10 @@ class FinetunedClassifier:
         return inner_formatting_prompts_func
 
     @method()
-    def inference(self, texts, vocabularies):
+    def inference(self, dataset):
         """Run inference to classify input texts"""
         from unsloth import FastLanguageModel
-        from datasets import Dataset
+        from datasets import Dataset, load_dataset
         def predict_category(prompted_inputs):
             inputs = tokenizer(prompted_inputs, padding=True, truncation=True, return_tensors="pt").to("cuda")
             outputs = model.generate(**inputs, max_new_tokens=10, use_cache=True)
@@ -124,10 +134,14 @@ class FinetunedClassifier:
         
         model, tokenizer = self.load_from_hub()
         FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
-        dataset = Dataset.from_dict({"input": texts, "vocabulary": vocabularies})
+        if type(dataset) == str:
+            dataset = load_dataset(dataset, split="train")
+        else:
+            dataset = Dataset.from_dict(dataset)
+
         prompted_input = dataset.map(self.formatting_prompts_func(self.classification_prompt, tokenizer.eos_token), batched=True)
         output = prompted_input.map(lambda batch: predict_category(batch['text']), batched=True, batch_size=4)
-        return output.to_dict()
+        return output.to_dict()['predicted_label']
 
     def save_to_hub(self, model, tokenizer):
         """Save the model and tokenizer to Hugging Face's Model Hub."""
@@ -156,7 +170,7 @@ def starter():
         finetuned_model_name=finetuned_model_name,
         hf_access_token=os.getenv("HF_ACCESS_TOKEN")
     )
-    #t.train.remote()
+    #t.train.remote(dataset="mjrdbds/llama-3-8b-bnb-4bit")
     inference_dataset = {
         'texts': ['this is an antique table very nice yay', 'A painting for use'],
         'vocabularies': [['table', 'painting'], ['table', 'painting']]
