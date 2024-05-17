@@ -121,7 +121,7 @@ class UnslothFinetunedClassifier:
             vocabulary = examples["vocabulary"]
             labels = examples["label"] if "label" in examples else [""] * len(examples["input"])
             tasks = [self.task] * len(examples["input"]) if "vocabulary" not in examples \
-                else [self.task.update_classes(v) for v in vocabulary]
+                else [self.task.set_classes(v) for v in vocabulary]
             texts = [
                 self.prompt_template.render(task=task, input=input, label=label) + eos_token
                 for input, label, task in zip(inputs, labels, tasks)
