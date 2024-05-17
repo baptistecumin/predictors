@@ -1,12 +1,11 @@
-"""
-TODO:
-- Do this from within python. Have the train() command in predictors for finetuning kick off a job. 
-- wrap the classification prompt in a jinja template
-"""
 import os
-from modal import App, Image, method, Secret
+from typing import Optional
+from modal import App, Image, method, Secret, Mount
+from tasks import Classify, ClassifierClass
 from datetime import datetime
 import dotenv
+from jinja2 import Environment, FileSystemLoader
+
 dotenv.load_dotenv()
 
 image = (
@@ -14,24 +13,21 @@ image = (
     .debian_slim(python_version="3.10")
     .apt_install("git", "git-lfs")
     .pip_install("unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git")
-    .pip_install("torch", "python-dotenv")
+    # .pip_install("torch", "python-dotenv", "pydantic", "jinja2")
+    .pip_install_from_requirements('requirements.txt')
 )
 
 app = App("train-peft", image=image)
 
 
-@app.cls(gpu='T4', container_idle_timeout=240, image=image, secrets=[Secret.from_dotenv()])
+@app.cls(gpu='T4', 
+         container_idle_timeout=30, 
+         image=image, 
+         secrets=[Secret.from_dotenv()],
+         mounts=[Mount.from_local_dir("./prompts", remote_path="/prompts")])
 class UnslothFinetunedClassifier:
-    classification_prompt = """Below is a set of classification labels, paired with an input. Classify the input into the closest of the provided classes. Only return the class, nothing else.
 
-    ### Classification labels:
-    {}
-
-    ### Input:
-    {}
-
-    ### Closest label:
-    {}"""
+    prompt_template_file = "classification_finetune.jinja"
 
     DEFAULT_TRAINING_ARGUMENTS = {
         'per_device_eval_batch_size': 4,
@@ -64,16 +60,21 @@ class UnslothFinetunedClassifier:
 
     def __init__(self, 
                  model_name, 
-                 prompt_template=None,
+                 prompt_template_file=None,
                  base_model_name=None, # not needed for inference 
                  training_arguments=None,
                  training_peft_arguments=None):
         self.model_name = model_name
         self.base_model_name = base_model_name
-        self.prompt_template = self.classification_prompt if prompt_template is None else prompt_template
         self.training_arguments = self.DEFAULT_TRAINING_ARGUMENTS if training_arguments is None else training_arguments
         self.training_peft_arguments = self.DEFAULT_TRAINING_PEFT_ARGUMENTS if training_peft_arguments is None else training_peft_arguments
         self.hf_access_token = os.getenv("HUGGING_FACE_ACCESS_TOKEN")
+        env = Environment(loader=FileSystemLoader('/prompts'))
+        self.prompt_template_file = self.prompt_template_file if prompt_template_file is None else prompt_template_file
+        self.prompt_template = env.get_template(self.prompt_template_file)
+
+    def format_prompt(self, task: Classify, input: str, label: Optional[str] = "") -> str:
+        return self.prompt_template.render(task=task, input=input, label=label)
 
     @method()
     def train(self, dataset):
@@ -98,7 +99,7 @@ class UnslothFinetunedClassifier:
         else:
             dataset = Dataset.from_dict(dataset)
 
-        dataset = dataset.map(self.formatting_prompts_func(self.prompt_template, tokenizer.eos_token), batched=True)
+        dataset = dataset.map(self.formatting_prompts_func(tokenizer.eos_token), batched=True)
 
         # Configure training
         trainer = SFTTrainer(
@@ -113,17 +114,23 @@ class UnslothFinetunedClassifier:
         trainer.train()
         self.save_to_hub(model, tokenizer, self.model_name)
         
-    def formatting_prompts_func(self, classification_prompt, eos_token):
+    def formatting_prompts_func(self, eos_token):
         """Helper to format prompts for training."""
         def inner_formatting_prompts_func(examples):
-            instructions = examples["vocabulary"]
             inputs = examples["input"]
-            outputs = examples["label"] if "label" in examples else [""] * len(examples["input"])
+            vocabulary = examples["vocabulary"]
+            labels = examples["label"] if "label" in examples else [""] * len(examples["input"])
             EOS_TOKEN = eos_token
             texts = [
-                classification_prompt.format(instruction, input, output) + EOS_TOKEN
-                for instruction, input, output in zip(instructions, inputs, outputs)
+                self.format_prompt(task=Classify(
+                        name="classify" , # instruction['name']
+                        description="classify this product by its category", #instruction['description'],
+                        classes=[ClassifierClass(name=v, 
+                                                 description="") for v in vocabulary],
+                ), input=input, label=label) + EOS_TOKEN
+                for input, vocabulary, label in zip(inputs, vocabulary, labels)
             ]
+            print(f"Example prompt: {texts[0]}")
             return {"text": texts}
 
         return inner_formatting_prompts_func
@@ -146,7 +153,7 @@ class UnslothFinetunedClassifier:
         else:
             dataset = Dataset.from_dict(dataset)
 
-        prompted_input = dataset.map(self.formatting_prompts_func(self.classification_prompt, tokenizer.eos_token), batched=True)
+        prompted_input = dataset.map(self.formatting_prompts_func(tokenizer.eos_token), batched=True)
         output = prompted_input.map(lambda batch: predict_category(batch['text']), batched=True, batch_size=4)
         return output.to_dict()['predicted_label']
 
@@ -200,6 +207,6 @@ if __name__ == "__main__":
         model_name=model_name,
         base_model_name="unsloth/llama-3-8b-bnb-4bit",
     )
-    print(f"Beginning training on {base_model_name}, dataset {dataset}")
+    print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
     predictor.train.remote(dataset=dataset)
-    print(f"Finished training on {base_model_name}, dataset {dataset}")
+    print(f"Finished training on {base_model_name}, dataset {dataset}, output model in {model_name}. View model in huggingface.")

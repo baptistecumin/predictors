@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, Field, field_validator, create_model
-from typing import Optional, Type, Literal, Union, List, Any, Tuple
-from data import InputData, TrainExample, ClassifierClass
+from pydantic import BaseModel, Field, create_model
+from typing import Optional, Type, Literal, Union, List
+from tasks import InputData, TrainExample, Classify, Predict, PromptTemplate
 
 import instructor
 from litellm import completion
@@ -9,44 +9,20 @@ import logger
 import dotenv
 dotenv.load_dotenv()
 
-from jinja2 import Environment, FileSystemLoader, Template
+from jinja2 import Environment, FileSystemLoader
 template_dir = './prompts'
 env = Environment(loader=FileSystemLoader(template_dir))
 
 logger = logger.get_logger()
 
-class Classify(BaseModel):
-    name: str
-    description: str
-    classes: Optional[List[ClassifierClass]]
-    chain_of_thought: Optional[bool] = False
-    
-    @field_validator('classes')
-    def check_class_names_unique(cls, value):
-        names = [classifier_class.name for classifier_class in value]
-        assert len(names) == len(set(names)), f"Class names must be unique, {names} names contains duplicates"
-        return value
-
-class Predict(BaseModel):
-    name: str
-    description: str
-    dtype: Optional[str] = None
-    chain_of_thought: Optional[bool] = False
-
-class PromptTemplate(BaseModel):
-    template: Template
-    class Config:
-        arbitrary_types_allowed = True
-
 class BasePredictor(ABC, BaseModel):
-    model: str
-    tasks: List[Union[Classify, Predict]]
-    
-    user_prompt_template_file: str
-    task_prompt_template_file: str
-    user_prompt_template: PromptTemplate = None
-    task_prompt_template: PromptTemplate = None
-    response_model: Optional[Type[BaseModel]] = None
+    model: str = Field(..., description="The model identifier used for predictions.")
+    tasks: List[Union[Classify, Predict]] = Field(..., description="A list of tasks that the predictor handles.")
+    user_prompt_template_file: str = Field(..., description="File path to the user prompt template.")
+    task_prompt_template_file: str = Field(..., description="File path to the task prompt template.")
+    user_prompt_template: PromptTemplate = Field(None, description="Compiled Jinja2 template for user prompts.")
+    task_prompt_template: PromptTemplate = Field(None, description="Compiled Jinja2 template for task prompts.")
+    response_model: Optional[Type[BaseModel]] = Field(None, description="Dynamically created response model based on tasks.")
 
     def model_post_init(self, __context) -> None:
         """
