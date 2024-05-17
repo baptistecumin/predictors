@@ -5,7 +5,7 @@ class ClassifierClass(BaseModel):
     """A possible label to predict for a task.
     """
     name: str 
-    description: str
+    description: str = ""
 
 class TrainExample(BaseModel):
     input: str

@@ -41,8 +41,9 @@ class PromptTemplate(BaseModel):
 class BasePredictor(ABC, BaseModel):
     model: str
     tasks: List[Union[Classify, Predict]]
-    user_prompt_template_file: str = 'tasks_one_shot.jinja'
-    task_prompt_template_file: str = 'tasks_description.jinja'
+    
+    user_prompt_template_file: str
+    task_prompt_template_file: str
     user_prompt_template: PromptTemplate = None
     task_prompt_template: PromptTemplate = None
     response_model: Optional[Type[BaseModel]] = None
@@ -83,6 +84,10 @@ class BasePredictor(ABC, BaseModel):
 
 
 class ZeroShotPredictor(BasePredictor):
+
+    user_prompt_template_file: str = 'tasks_one_shot.jinja'
+    task_prompt_template_file: str = 'tasks_description.jinja'
+
     def fit(self, X) -> List[int]:
         return self.predict(X)
 
@@ -157,7 +162,14 @@ class FewShotTeacherPredictor(BasePredictor):
         return outputs
 
 class FineTunedPredictor(BasePredictor):
-    pass
+
+    def train(self, X, y):
+        pass
+
+
+
+    def predict(self, X):
+        pass
 
 class FineTunedFewShotPredictor(BasePredictor):
     pass
