@@ -95,7 +95,7 @@ class UnslothFinetunedClassifier:
         model = FastLanguageModel.get_peft_model(model, **self.training_peft_arguments)
         
         if type(dataset) == str:
-            dataset = load_dataset(dataset, split="train[:10%]")
+            dataset = load_dataset(dataset, split="train")
         else:
             dataset = Dataset.from_dict(dataset)
 
@@ -190,7 +190,6 @@ def starter():
     print(inference)
 
 if __name__ == "__main__":
-    #from finetune import app
     model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
     base_model_name = "unsloth/llama-3-8b-bnb-4bit"
     dataset = "mjrdbds/classifiers-finetuning-060525"
@@ -215,3 +214,7 @@ if __name__ == "__main__":
     print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
     predictor.train.remote(dataset=dataset)
     print(f"Finished training on {base_model_name}, dataset {dataset}, output model in {model_name}. View model in huggingface.")
+    print(f"Beginning inference on {base_model_name}, dataset {dataset}. View logs within Modal.")
+    inference = predictor.inference.remote(dataset=dataset)
+    print(inference)
+    

@@ -1,7 +1,8 @@
 ## Quickstart
 
-Use LLMs as text classifiers. 
+Use LLMs as text classifiers. Finetune LLMs for text classification. 
 
+1. Run a simple classifier 
 ```python
 from predictors import ZeroShotPredictor, Predict
 X_train = ["1", "2", "3", "3"]
@@ -19,7 +20,8 @@ clf.predict(X_train)
 ```
 > [False, True, False, False]
 
-Run several predictions at once. 
+2. Run one classifier for multiple predictions 
+
 ```python
 from predictors import FewShotTeacherPredictor, Predict, Classify
 tasks = [
@@ -43,3 +45,5 @@ ZeroShotPredictor(
     teacher_model="gpt-4-turbo"
 )
 ```
+
+3. Finetune your own LLM classifier 

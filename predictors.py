@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field, create_model
 from typing import Optional, Type, Literal, Union, List
 from tasks import InputData, TrainExample, Classify, Predict, PromptTemplate
-
+from finetune import app
 import instructor
 from litellm import completion
 import logger
@@ -18,9 +18,10 @@ logger = logger.get_logger()
 class BasePredictor(ABC, BaseModel):
     model: str = Field(..., description="The model identifier used for predictions.")
     tasks: List[Union[Classify, Predict]] = Field(..., description="A list of tasks that the predictor handles.")
-    user_prompt_template_file: str = Field(..., description="File path to the user prompt template.")
-    task_prompt_template_file: str = Field(..., description="File path to the task prompt template.")
-    user_prompt_template: PromptTemplate = Field(None, description="Compiled Jinja2 template for user prompts.")
+    prompt_template_file: str = Field(..., description="File path to the user prompt template.")
+    
+    task_prompt_template_file: str = Field(None, description="File path for a task prompt. This adds more specificity to the function. ")
+    prompt_template: PromptTemplate = Field(None, description="Compiled Jinja2 template for user prompts.")
     task_prompt_template: PromptTemplate = Field(None, description="Compiled Jinja2 template for task prompts.")
     response_model: Optional[Type[BaseModel]] = Field(None, description="Dynamically created response model based on tasks.")
 
@@ -38,13 +39,13 @@ class BasePredictor(ABC, BaseModel):
                 prediction_object_fields[task.name] = (class_labels_type, Field(..., description=task.description))
             if task.chain_of_thought:
                 prediction_object_fields["chain_of_thought"] = ("str", Field(..., description=f"Think step by step to determine the correct {task.name}"))
-        task_prompt_template = env.get_template(self.task_prompt_template_file)
+        task_prompt_template = env.get_template(self.task_prompt_template_file) if self.task_prompt_template_file else None
         self.response_model = create_model(
             __model_name='Labels', 
-            __doc__=task_prompt_template.render(tasks=self.tasks),
+            __doc__=task_prompt_template.render(tasks=self.tasks) if task_prompt_template else None,
             **prediction_object_fields,
             )
-        self.user_prompt_template = env.get_template(self.user_prompt_template_file)
+        self.prompt_template = env.get_template(self.prompt_template_file)
         return self
 
     @abstractmethod
@@ -56,12 +57,12 @@ class BasePredictor(ABC, BaseModel):
         pass
     
     def apply_prompt(self, x: str):
-        return self.user_prompt_template.render(tasks=self.tasks, input=x)
+        return self.prompt_template.render(tasks=self.tasks, input=x)
 
 
 class ZeroShotPredictor(BasePredictor):
 
-    user_prompt_template_file: str = 'tasks_one_shot.jinja'
+    prompt_template_file: str = 'tasks_one_shot.jinja'
     task_prompt_template_file: str = 'tasks_description.jinja'
 
     def fit(self, X) -> List[int]:
@@ -92,12 +93,12 @@ class ZeroShotPredictor(BasePredictor):
 
 class FewShotTeacherPredictor(BasePredictor):
     teacher_model: str
-    user_prompt_template_file: str = 'tasks_few_shot.jinja'
+    prompt_template_file: str = 'tasks_few_shot.jinja'
     few_shot_examples: List[TrainExample] = []
 
     def apply_prompt(self, x: str):
         few_shot_examples = [{'input': ex.input, 'label': str(ex.labels)} for ex in self.few_shot_examples]
-        return self.user_prompt_template.render(
+        return self.prompt_template.render(
             tasks=self.tasks,
             few_shot_examples=few_shot_examples,
             input=x
@@ -137,9 +138,37 @@ class FewShotTeacherPredictor(BasePredictor):
             return [output[0] for output in outputs]
         return outputs
 
-class FineTunedPredictor(BasePredictor):
+class FineTunedPredictor: 
+
 
     def train(self, X, y):
+        model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
+        base_model_name = "unsloth/llama-3-8b-bnb-4bit"
+        dataset = "mjrdbds/classifiers-finetuning-060525"
+        from modal.runner import deploy_app
+        from modal import Cls
+        d = deploy_app(app)
+        print(f"Deployed modal app: {d}")
+        task = Classify(
+                name="category",
+                description="The category of the input text.",
+                classes=[
+                    ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
+                    ClassifierClass(name="not furniture", description="Is the item not a piece of furniture"),
+                ]
+        )
+        _UnslothFinetunedClassifier = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
+        predictor = _UnslothFinetunedClassifier(
+            model_name=model_name,
+            base_model_name="unsloth/llama-3-8b-bnb-4bit",
+            task=task,
+        )
+        print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
+        predictor.train.remote(dataset=dataset)
+        print(f"Finished training on {base_model_name}, dataset {dataset}, output model in {model_name}. View model in huggingface.")
+        print(f"Beginning inference on {base_model_name}, dataset {dataset}. View logs within Modal.")
+        inference = predictor.inference.remote(dataset=dataset)
+        print(inference)
         pass
 
 
