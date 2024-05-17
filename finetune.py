@@ -1,10 +1,15 @@
+"""
+TODO - Keep the model in memory for many subsequent inference calls? 
+"""
+
+import json
+import time
 import os
-from typing import Optional
-from modal import App, Image, method, Secret, Mount
+from modal import App, Image, method, Secret, Mount, web_endpoint
 from tasks import Classify, ClassifierClass
-from datetime import datetime
 import dotenv
 from jinja2 import Environment, FileSystemLoader
+from openai_models import ChatCompletionRequest, ChatCompletionMessageToolCall, ChatMessage, Function
 
 dotenv.load_dotenv()
 
@@ -13,12 +18,10 @@ image = (
     .debian_slim(python_version="3.10")
     .apt_install("git", "git-lfs")
     .pip_install("unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git")
-    # .pip_install("torch", "python-dotenv", "pydantic", "jinja2")
     .pip_install_from_requirements('requirements.txt')
 )
 
 app = App("train-peft", image=image)
-
 
 @app.cls(gpu='T4', 
          container_idle_timeout=30, 
@@ -152,6 +155,24 @@ class UnslothFinetunedClassifier:
         prompted_input = dataset.map(self.formatting_prompts_func(tokenizer.eos_token), batched=True)
         output = prompted_input.map(lambda batch: predict_category(batch['text']), batched=True, batch_size=4)
         return output.to_dict()['predicted_label']
+    
+    @web_endpoint(method = 'POST')
+    def inference_openai(self, request: ChatCompletionRequest):
+        results_dict = {"name": "test", "description": "test"}
+        json_results_dict = json.dumps(results_dict)
+        tool_calls = ChatCompletionMessageToolCall(id='1',
+            function=Function(name="Response", arguments=json_results_dict), 
+                                                args=[])
+        message = ChatMessage(role="user", content="Say this is a test", tool_calls=[tool_calls])
+        return {
+            "id": "1337",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [{
+                "message": message,
+            }],
+        }
 
     def save_to_hub(self, model, tokenizer, hf_model_name):
         """Save the model and tokenizer to Hugging Face's Model Hub."""
@@ -172,22 +193,6 @@ class UnslothFinetunedClassifier:
         )
         return model, tokenizer
 
-@app.local_entrypoint()
-def starter():
-    current_date = datetime.now().strftime("%Y%m%d")
-    model_name = f"mjrdbds/llama3-4b-classifierunsloth-{current_date}-lora"
-    t = UnslothFinetunedClassifier(
-        base_model_name="unsloth/llama-3-8b-bnb-4bit",
-        model_name=model_name,
-        hf_access_token=os.getenv("HF_ACCESS_TOKEN")
-    )
-    #t.train.remote(dataset="mjrdbds/llama-3-8b-bnb-4bit")
-    inference_dataset = {
-        'input': ['this is an antique table very nice yay', 'A painting for use'],
-        'vocabulary': [['table', 'painting'], ['table', 'painting']]
-    }
-    inference = t.inference.remote(inference_dataset)
-    print(inference)
 
 if __name__ == "__main__":
     model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
@@ -196,6 +201,7 @@ if __name__ == "__main__":
     from modal.runner import deploy_app
     from modal import Cls
     d = deploy_app(app)
+    
     print(f"Deployed modal app: {d}")
     task = Classify(
             name="category",
@@ -211,6 +217,7 @@ if __name__ == "__main__":
         base_model_name="unsloth/llama-3-8b-bnb-4bit",
         task=task,
     )
+
     print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
     predictor.train.remote(dataset=dataset)
     print(f"Finished training on {base_model_name}, dataset {dataset}, output model in {model_name}. View model in huggingface.")
