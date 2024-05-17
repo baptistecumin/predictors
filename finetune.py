@@ -60,21 +60,21 @@ class UnslothFinetunedClassifier:
 
     def __init__(self, 
                  model_name, 
+                 task,
                  prompt_template_file=None,
                  base_model_name=None, # not needed for inference 
                  training_arguments=None,
                  training_peft_arguments=None):
         self.model_name = model_name
         self.base_model_name = base_model_name
+        self.task = task
         self.training_arguments = self.DEFAULT_TRAINING_ARGUMENTS if training_arguments is None else training_arguments
         self.training_peft_arguments = self.DEFAULT_TRAINING_PEFT_ARGUMENTS if training_peft_arguments is None else training_peft_arguments
         self.hf_access_token = os.getenv("HUGGING_FACE_ACCESS_TOKEN")
         env = Environment(loader=FileSystemLoader('/prompts'))
         self.prompt_template_file = self.prompt_template_file if prompt_template_file is None else prompt_template_file
         self.prompt_template = env.get_template(self.prompt_template_file)
-
-    def format_prompt(self, task: Classify, input: str, label: Optional[str] = "") -> str:
-        return self.prompt_template.render(task=task, input=input, label=label)
+        
 
     @method()
     def train(self, dataset):
@@ -120,15 +120,11 @@ class UnslothFinetunedClassifier:
             inputs = examples["input"]
             vocabulary = examples["vocabulary"]
             labels = examples["label"] if "label" in examples else [""] * len(examples["input"])
-            EOS_TOKEN = eos_token
+            tasks = [self.task] * len(examples["input"]) if "vocabulary" not in examples \
+                else [self.task.update_classes(v) for v in vocabulary]
             texts = [
-                self.format_prompt(task=Classify(
-                        name="classify" , # instruction['name']
-                        description="classify this product by its category", #instruction['description'],
-                        classes=[ClassifierClass(name=v, 
-                                                 description="") for v in vocabulary],
-                ), input=input, label=label) + EOS_TOKEN
-                for input, vocabulary, label in zip(inputs, vocabulary, labels)
+                self.prompt_template.render(task=task, input=input, label=label) + eos_token
+                for input, label, task in zip(inputs, labels, tasks)
             ]
             print(f"Example prompt: {texts[0]}")
             return {"text": texts}
@@ -202,10 +198,19 @@ if __name__ == "__main__":
     from modal import Cls
     d = deploy_app(app)
     print(f"Deployed modal app: {d}")
+    task = Classify(
+            name="category",
+            description="The category of the input text.",
+            classes=[
+                ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
+                ClassifierClass(name="not furniture", description="Is the item not a piece of furniture"),
+            ]
+    )
     _UnslothFinetunedClassifier = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
     predictor = _UnslothFinetunedClassifier(
         model_name=model_name,
         base_model_name="unsloth/llama-3-8b-bnb-4bit",
+        task=task,
     )
     print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
     predictor.train.remote(dataset=dataset)

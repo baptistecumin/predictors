@@ -33,6 +33,12 @@ class Classify(BaseModel):
         assert len(names) == len(set(names)), f"Class names must be unique, {names} names contains duplicates"
         return value
 
+    def set_classes(self, classes: Union[List[str], List[ClassifierClass]]) -> None:
+        if type(classes[0]) == str:
+            self.classes = [ClassifierClass(name=v, description="") for v in classes]
+        else:
+            self.classes = classes
+
 class Predict(BaseModel):
     name: str = Field(..., description="The name of the prediction task.")
     description: str = Field(..., description="A brief description of the prediction task.")

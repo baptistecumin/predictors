@@ -29,16 +29,14 @@ if __name__ == "__main__":
     print(cls.predict(X_test))
 
     # ideal interface. note classifier only for now.
-    tasks = [
-        Classify(
+    task = Classify(
             name="category",
             description="The category of the input text.",
             classes=[
                 ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
                 ClassifierClass(name="decorative", description="Is the item a decorative object"),
             ]
-        )
-    ]
+    )
     X_train = ["table", "chair", "mirror"]
     y_train = ["furniture", "furniture", "decorative"]
     cls = FineTunedPredictor(
@@ -48,4 +46,3 @@ if __name__ == "__main__":
     )
     cls.train(X_train, y_train)
     print(cls.predict(X_test))
-    

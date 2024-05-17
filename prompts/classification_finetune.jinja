@@ -1,7 +1,8 @@
 Given an input label, submit your answer for this task. Return only a label, nothing else.
-<task>{{ task.name }} : {{ task.description }}. 
-{% if 'class' in task %} Possible labels: {% for class in task.classes %} 
-<label>"{{ class.name }}" : {{ class.description }}</label> 
-{% endfor %} {% endif %} 
+<task>{{ task.name }} : {{ task.description }}.</task>
+Possible labels:
+{% for class in task.classes %}
+<label>"{{ class.name }}" {% if class.description %}: {{ class.description }}{% endif %}</label>
+{% endfor %}
 input: {{ input }}
 label:{% if label %} {{ label }}{% endif %}
