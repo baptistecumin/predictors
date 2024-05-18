@@ -31,6 +31,9 @@ async def chat_completions(request: ChatCompletionRequest):
 if __name__ == '__main__':
     import instructor 
     from litellm import completion
+    import http.client as http_client
+    http_client.HTTPConnection.debuglevel = 1
+
     client = instructor.from_litellm(completion)
     response = client.chat.completions.create(messages=[
             {
