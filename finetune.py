@@ -88,7 +88,7 @@ class UnslothFinetunedClassifier:
 
         os.makedirs(TASK_CONFIG_DIR, exist_ok=True)
         with open(f"{TASK_CONFIG_DIR}/task.json", 'w') as f:
-            json.dump(task.__dict__, f)
+            json.dump(task.dict(), f)
         with open(f"{TASK_CONFIG_DIR}/prompt_template_file.txt", 'w') as f:
             f.write(prompt_template_file)
         volume.commit()

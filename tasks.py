@@ -9,6 +9,12 @@ class ClassifierClass(BaseModel):
     name: str 
     description: str = ""
 
+    def dict(self):
+        return {
+            "name": self.name,
+            "description": self.description
+        }
+
 class TrainExample(BaseModel):
     input: str
     labels: Dict[str, Union[str, float, int]] 
