@@ -26,11 +26,12 @@ app = App("train-peft", image=image)
 @dataclass
 class TrainingArguments:
     per_device_eval_batch_size: int = 4
-    per_device_train_batch_size: int = 4
+    per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 4
     warmup_steps: int = 5
-    max_steps: int = 10
+    max_steps: int = 60
     learning_rate: float = 2e-4
+    bf16: bool = False 
     fp16: bool = True
     logging_steps: int = 1
     optim: str = "adamw_8bit"
@@ -54,6 +55,7 @@ class TrainingPeftArguments:
 
 @app.cls(gpu='T4', 
          container_idle_timeout=30, 
+         timeout=3000,
          image=image, 
          secrets=[Secret.from_dotenv()],
          mounts=[Mount.from_local_dir("./prompts", remote_path="/prompts")],
@@ -87,7 +89,7 @@ class UnslothFinetunedClassifier:
         template_source = env.loader.get_source(env, prompt_template_file)[0]
         parsed_content = env.parse(template_source)
         fields_required_in_prompt = list(meta.find_undeclared_variables(parsed_content))
-        fields_required_in_dataset = [i for i in fields_required_in_prompt if i != 'task']
+        fields_required_in_dataset = [i for i in fields_required_in_prompt if i not in ['task', 'label']]
         
         os.makedirs(self.task_config_dir, exist_ok=True)
         with open(f"{self.task_config_dir}/task.json", 'w') as f:
@@ -115,13 +117,34 @@ class UnslothFinetunedClassifier:
         except FileNotFoundError:
             print("No task configuration found.")
 
+    def formatting_prompts_func(self, eos_token, train=True):
+        """Helper to format prompts."""
+        def inner_formatting_prompts_func(examples):
+            print(f'Examples: {examples}')
+            data = {field: examples[field] for field in self.fields_required_in_dataset}
+            if train:
+                data['label'] = examples['label']
+            texts = []
+            for i in range(len(examples[next(iter(examples))])): 
+                print(f"Example {i}: {data}")
+                example_data = {field: data[field][i] for field in data}
+                example_data['task'] = self.task
+                print(f"Example data: {example_data}")
+                text = self.prompt_template.render(**example_data)
+                if train:
+                    text = text + eos_token
+                texts.append(text)            
+            print(f"Example prompt: {texts[0]}")
+            return {"text": texts}
+
+        return inner_formatting_prompts_func
+    
     @method()
     def train(self, 
-              dataset, 
+              dataset: Union[str, Dict],
               training_arguments: TrainingArguments = TrainingArguments(), 
               training_peft_arguments: TrainingPeftArguments = TrainingPeftArguments()):
         """Train the base model. Dataset can either be a string, interpreted as a huggingface dataset, or a dict."""
-        print(self.task)
         from datasets import load_dataset, Dataset
         from trl import SFTTrainer
         from transformers import TrainingArguments as HFTrainingArguments
@@ -140,6 +163,7 @@ class UnslothFinetunedClassifier:
         if isinstance(dataset, str):
             dataset = load_dataset(dataset, split="train")
         else:
+            print(dataset)
             dataset = Dataset.from_dict(dataset)
         missing_fields = [field for field in self.fields_required_in_dataset if field not in dataset.column_names]
         if missing_fields:
@@ -159,25 +183,8 @@ class UnslothFinetunedClassifier:
         self.save_to_hub(model, tokenizer)
         self.save_to_volume(model, tokenizer)
 
-    def formatting_prompts_func(self, eos_token):
-        """Helper to format prompts."""
-        def inner_formatting_prompts_func(examples):
-            data = {field: examples[field] for field in self.fields_required_in_dataset}            
-            texts = []
-            for i in range(len(examples[next(iter(examples))])): 
-                example_data = {field: data[field][i] for field in data}
-                example_data['eos_token'] = eos_token
-                if 'task' not in example_data:
-                    example_data['task'] = self.task
-                text = self.prompt_template.render(**example_data) + eos_token
-                texts.append(text)            
-            print(f"Example prompt: {texts[0]}")
-            return {"text": texts}
-
-        return inner_formatting_prompts_func
-
     @method()
-    def inference(self, dataset):
+    def predict(self, dataset: Union[str, Dict]):
         """Run inference to classify input texts."""
         from unsloth import FastLanguageModel
         from datasets import Dataset, load_dataset
@@ -190,11 +197,11 @@ class UnslothFinetunedClassifier:
         
         FastLanguageModel.for_inference(self.model)  # Enable native 2x faster inference
         if isinstance(dataset, str):
-            dataset = load_dataset(dataset, split="train")
+            dataset = load_dataset(dataset, split="train[:1%]")
         else:
             dataset = Dataset.from_dict(dataset)
 
-        prompted_input = dataset.map(self.formatting_prompts_func(self.tokenizer.eos_token), batched=True)
+        prompted_input = dataset.map(self.formatting_prompts_func(self.tokenizer.eos_token, train=False), batched=True, batch_size=4)
         output = prompted_input.map(lambda batch: predict_category(batch['text']), batched=True, batch_size=4)
         return output.to_dict()['predicted_label']
     
@@ -253,32 +260,3 @@ class UnslothFinetunedClassifier:
         model.save_pretrained(path)
         tokenizer.save_pretrained(path)
         volume.commit()
-
-if __name__ == "__main__":
-    from modal.runner import deploy_app
-    from tasks import Classify
-
-    deploy_app(app)
-
-    task = Classify(
-        name="category",
-        description="The category of the input product."
-    )
-    
-    finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
-    base_model_name = "unsloth/llama-3-8b-bnb-4bit"
-
-    classifier = UnslothFinetunedClassifier(
-        finetuned_model_name=finetuned_model_name,
-        base_model_name=base_model_name,
-    )
-    dataset_schema = classifier.set_task_prompt.remote(task=task, prompt_template_file="classification_jit_labels.jinja")
-
-    dataset = "mjrdbds/classifiers-finetuning-060525"
-    classifier.train.remote(dataset=dataset)
-    result = classifier.inference.remote(dataset=dataset)
-    
-    ## The next day
-    cls = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
-    m1 = cls(finetuned_model_name=finetuned_model_name, base_model_name=base_model_name)
-    print(m1.inference.remote(dataset=dataset))

@@ -30,7 +30,7 @@ class InputData(BaseModel):
 class Classify(BaseModel):
     name: str = Field(..., description="The name of the classification task.")
     description: str = Field(..., description="A brief description of the classification task.")
-    classes: Optional[List[ClassifierClass]] = Field(None, description="A list of possible classification classes.")
+    classes: Optional[List[ClassifierClass]] = Field([], description="A list of possible classification classes.")
     chain_of_thought: Optional[bool] = Field(False, description="Whether to use chain of thought reasoning.")
 
     @field_validator('classes')

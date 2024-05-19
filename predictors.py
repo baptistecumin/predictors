@@ -1,6 +1,9 @@
+from modal.runner import deploy_app
+from modal import Cls
+from tasks import Classify
 from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field, create_model
-from typing import Optional, Type, Literal, Union, List
+from typing import Optional, Type, Literal, Union, List, Any
 from tasks import InputData, TrainExample, Classify, Predict, PromptTemplate
 from finetune import app
 import instructor
@@ -138,43 +141,34 @@ class FewShotTeacherPredictor(BasePredictor):
             return [output[0] for output in outputs]
         return outputs
 
-class FineTunedPredictor: 
+class FineTunedPredictor(BaseModel): 
+    """ TODO how do we merge this with the BasePredictor?"""
+    base_model_name: str
+    model: str = Field(..., description="The model identifier used for predictions.")
+    tasks: List[Union[Classify, Predict]] = Field(..., description="A list of tasks that the predictor handles.")
 
+    prompt_template_file: str = Field(..., description="File path to the user prompt template, deployed remotely to modal.")
+    predictor: Any = Field(None, description="The model object deployed remotely to modal.")
 
-    def train(self, X, y):
-        model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
-        base_model_name = "unsloth/llama-3-8b-bnb-4bit"
-        dataset = "mjrdbds/classifiers-finetuning-060525"
-        from modal.runner import deploy_app
-        from modal import Cls
-        d = deploy_app(app)
-        print(f"Deployed modal app: {d}")
-        task = Classify(
-                name="category",
-                description="The category of the input text.",
-                classes=[
-                    ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
-                    ClassifierClass(name="not furniture", description="Is the item not a piece of furniture"),
-                ]
-        )
-        _UnslothFinetunedClassifier = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
-        predictor = _UnslothFinetunedClassifier(
-            model_name=model_name,
-            base_model_name="unsloth/llama-3-8b-bnb-4bit",
-            task=task,
-        )
-        print(f"Beginning training on {base_model_name}, dataset {dataset}. View logs within Modal.")
-        predictor.train.remote(dataset=dataset)
-        print(f"Finished training on {base_model_name}, dataset {dataset}, output model in {model_name}. View model in huggingface.")
-        print(f"Beginning inference on {base_model_name}, dataset {dataset}. View logs within Modal.")
-        inference = predictor.inference.remote(dataset=dataset)
-        print(inference)
-        pass
+    def model_post_init(self, __context) -> None:
+        # how do we know if we should deploy the app or not? If it's initializing for the first time?
+        deploy_app(app)
+        cls = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
+        self.predictor = cls(finetuned_model_name=self.model, base_model_name=self.base_model_name)
+        required_dataset_fields = self.predictor.set_task_prompt.remote(task=self.tasks[0], prompt_template_file=self.prompt_template_file)
+        print("Required dataset fields: ", required_dataset_fields)
 
-
-
+    def fit(self, X, y):
+        if len(self.tasks) > 1:
+            raise NotImplementedError("Only one task supported for now.")
+        self.predictor.set_task_prompt.remote(task=self.tasks[0], prompt_template_file=self.prompt_template_file)
+        dataset_dict = {'input': X, 'label': y}
+        self.predictor.train.remote(dataset=dataset_dict)
+        return self       
+    
     def predict(self, X):
-        pass
+        dataset_dict = {'input': X}
+        return self.predictor.predict.remote(dataset=dataset_dict)
 
 class FineTunedFewShotPredictor(BasePredictor):
     pass
@@ -184,9 +178,32 @@ class EmbeddingPredictor():
     Prompted embeddings. Not currently used.
     """
 
-    # from InstructorEmbedding import INSTRUCTOR
-    # model = INSTRUCTOR('hkunlp/instructor-large')
-    # sentence = "3D ActionSLAM: wearable person tracking in multi-floor environments"
-    # instruction = "Represent the Science title:"
-    # embeddings = model.encode([[instruction,sentence]])
-    # print(embeddings)
+if __name__ == "__main__":
+    finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
+    base_model_name = "unsloth/llama-3-8b-bnb-4bit"
+    prompt_template_file = 'classification_labels.jinja'
+    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
+    y = ["not furniture", "furniture"]
+    tasks = [Classify(name="classify", description="Classify the category of the input")]
+    cls = FineTunedPredictor(
+        tasks=tasks,
+        model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
+        base_model_name=base_model_name,
+        prompt_template_file=prompt_template_file,
+    )
+    cls.fit(X, y)
+    cls.predict(X)
+
+    # The next day, reload your model and run inference with a huggingface dataset or a dict :) 
+    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
+    y = ["not furniture", "furniture"]
+    tasks = [Classify(name="classify", description="Classify the category of the input")]
+    cls = FineTunedPredictor(
+        tasks=tasks,
+        model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
+        base_model_name=base_model_name,
+        prompt_template_file=prompt_template_file,
+    )
+    # cls.fit(X, y) already done this! 
+    print(cls.predict(X))
+
