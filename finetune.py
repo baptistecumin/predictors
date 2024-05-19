@@ -197,7 +197,7 @@ class UnslothFinetunedClassifier:
         
         FastLanguageModel.for_inference(self.model)  # Enable native 2x faster inference
         if isinstance(dataset, str):
-            dataset = load_dataset(dataset, split="train[:1%]")
+            dataset = load_dataset(dataset, split="test")
         else:
             dataset = Dataset.from_dict(dataset)
 

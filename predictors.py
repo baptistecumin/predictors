@@ -1,3 +1,6 @@
+"""
+TODO: allow for finetuning on multiple tasks at once. Separate answers by <task>key:value</task>
+"""
 from modal.runner import deploy_app
 from modal import Cls
 from tasks import Classify
@@ -166,9 +169,17 @@ class FineTunedPredictor(BaseModel):
         self.predictor.train.remote(dataset=dataset_dict)
         return self       
     
+    def fit_hf(self, dataset):
+        self.predictor.train.remote(dataset=dataset)
+        return self
+
     def predict(self, X):
-        dataset_dict = {'input': X}
-        return self.predictor.predict.remote(dataset=dataset_dict)
+        if type(X) == List:
+            dataset = {'input': X}
+        elif type(X) == str:
+            print('Interpreting X as a huggingface dataset str')
+            dataset = X
+        return self.predictor.predict.remote(dataset=dataset)
 
 class FineTunedFewShotPredictor(BasePredictor):
     pass
@@ -182,9 +193,11 @@ if __name__ == "__main__":
     finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
     base_model_name = "unsloth/llama-3-8b-bnb-4bit"
     prompt_template_file = 'classification_labels.jinja'
+    tasks = [Classify(name="classify", description="Classify the category of the input")]
+    
+    # Option 1: fit with an in-memory dataset
     X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
     y = ["not furniture", "furniture"]
-    tasks = [Classify(name="classify", description="Classify the category of the input")]
     cls = FineTunedPredictor(
         tasks=tasks,
         model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
@@ -192,18 +205,20 @@ if __name__ == "__main__":
         prompt_template_file=prompt_template_file,
     )
     cls.fit(X, y)
-    cls.predict(X)
+    print(cls.predict(X))
 
-    # The next day, reload your model and run inference with a huggingface dataset or a dict :) 
-    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
-    y = ["not furniture", "furniture"]
-    tasks = [Classify(name="classify", description="Classify the category of the input")]
+    # Option 2: fit with a huggingface dataset
+    dataset = "mjrdbds/classifiers-finetuning-060525"
+    cls.fit_hf(dataset) # automatically trains on train set
+    print(cls.predict(dataset)) # automatically predicts on test set
+
+    # Model persistence. The next day, boot up your model, it's still there.
     cls = FineTunedPredictor(
         tasks=tasks,
         model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
         base_model_name=base_model_name,
         prompt_template_file=prompt_template_file,
     )
-    # cls.fit(X, y) already done this! 
+    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
     print(cls.predict(X))
 
