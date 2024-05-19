@@ -1,6 +1,3 @@
-"""
-TODO - Keep the model in memory for many subsequent inference calls? 
-"""
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 import json
@@ -9,7 +6,7 @@ import os
 from modal import App, Image, method, Secret, Mount, web_endpoint, Volume, Cls
 from tasks import Classify, ClassifierClass
 import dotenv
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, meta
 from openai_models import ChatCompletionRequest, ChatCompletionMessageToolCall, ChatMessage, Function
 
 dotenv.load_dotenv()
@@ -66,42 +63,53 @@ class UnslothFinetunedClassifier:
     def __init__(self, finetuned_model_name, base_model_name):
         self.finetuned_model_name = finetuned_model_name
         self.base_model_name = base_model_name
-        self.task = None
-        self.prompt_template = None
         self.hf_access_token = os.getenv("HUGGING_FACE_ACCESS_TOKEN")
-
-        if os.path.exists(f"{MODEL_WEIGHTS_DIR}/{finetuned_model_name}"):
-            print('Weights exist! Initializing')
-            self.model, self.tokenizer = self.load_from_volume()
-        else:
-            print('Weights do not exist yet')
+        self.task_config_dir = f"{TASK_CONFIG_DIR}/{self.finetuned_model_name}"
         
-        self.get_task_prompt()
+        if os.path.exists(self.task_config_dir):
+            print('Task and prompt config exists. Loading from volume.')
+            self.get_task_prompt(self.task_config_dir)
 
+            if os.path.exists(f"{MODEL_WEIGHTS_DIR}/{finetuned_model_name}"):
+                print('Weights exist. Initializing pre-configured model.')
+                self.model, self.tokenizer = self.load_from_volume()
+        else:
+            print('Weights do not exist yet. Please configure task, prompt and train.')
+        
     @method()
-    def set_task_prompt(self, task, prompt_template_file='classification_finetune.jinja'):
-        """Save task and prompt_template_file to volume for persistence.
-        Note we do this in configure instead of init as containers are uniquely
-        defined within by the init call."""
-        self.task = task
-        self.prompt_template_file = prompt_template_file
-
-        os.makedirs(TASK_CONFIG_DIR, exist_ok=True)
-        with open(f"{TASK_CONFIG_DIR}/task.json", 'w') as f:
+    def set_task_prompt(self, task, prompt_template_file="classification_labels.jinja"):
+        """
+        Configure the model with a task and a prompt template. Saves them to volume for persistence.
+        Note we do this in configure instead of init as Modal functions are uniquely
+        defined by the init call args. This ensures a subsequent call to uses a warm instance.
+        """
+        env = Environment(loader=FileSystemLoader('/prompts'))
+        template_source = env.loader.get_source(env, prompt_template_file)[0]
+        parsed_content = env.parse(template_source)
+        fields_required_in_prompt = list(meta.find_undeclared_variables(parsed_content))
+        fields_required_in_dataset = [i for i in fields_required_in_prompt if i != 'task']
+        
+        os.makedirs(self.task_config_dir, exist_ok=True)
+        with open(f"{self.task_config_dir}/task.json", 'w') as f:
             json.dump(task.dict(), f)
-        with open(f"{TASK_CONFIG_DIR}/prompt_template_file.txt", 'w') as f:
+        with open(f"{self.task_config_dir}/prompt_template_file.txt", 'w') as f:
             f.write(prompt_template_file)
+        with open(f"{self.task_config_dir}/fields_required_in_prompt.txt", 'w') as f:
+            f.write('\n'.join(fields_required_in_dataset))
         volume.commit()
+        return list(fields_required_in_dataset)
 
-    def get_task_prompt(self):
+    def get_task_prompt(self, task_config_dir):
         """Load task and prompt_template_file from volume if they exist."""
         try:
-            with open(f"{TASK_CONFIG_DIR}/task.json", 'r') as f:
+            with open(f"{task_config_dir}/task.json", 'r') as f:
                 task_dict = json.load(f)
+                task_dict = {k: v for k, v in task_dict.items() if v is not None}
                 self.task = Classify(**task_dict)
-            with open(f"{TASK_CONFIG_DIR}/prompt_template_file.txt", 'r') as f:
+            with open(f"{task_config_dir}/prompt_template_file.txt", 'r') as f:
                 self.prompt_template_file = f.read()
-
+            with open(f"{task_config_dir}/fields_required_in_prompt.txt", 'r') as f:
+                self.fields_required_in_dataset = f.read().split('\n')
             env = Environment(loader=FileSystemLoader('/prompts'))
             self.prompt_template = env.get_template(self.prompt_template_file)
         except FileNotFoundError:
@@ -113,6 +121,7 @@ class UnslothFinetunedClassifier:
               training_arguments: TrainingArguments = TrainingArguments(), 
               training_peft_arguments: TrainingPeftArguments = TrainingPeftArguments()):
         """Train the base model. Dataset can either be a string, interpreted as a huggingface dataset, or a dict."""
+        print(self.task)
         from datasets import load_dataset, Dataset
         from trl import SFTTrainer
         from transformers import TrainingArguments as HFTrainingArguments
@@ -132,7 +141,9 @@ class UnslothFinetunedClassifier:
             dataset = load_dataset(dataset, split="train")
         else:
             dataset = Dataset.from_dict(dataset)
-
+        missing_fields = [field for field in self.fields_required_in_dataset if field not in dataset.column_names]
+        if missing_fields:
+            raise ValueError(f"Dataset is missing required fields: {missing_fields}")
         dataset = dataset.map(self.formatting_prompts_func(tokenizer.eos_token), batched=True)
 
         trainer = SFTTrainer(
@@ -149,17 +160,17 @@ class UnslothFinetunedClassifier:
         self.save_to_volume(model, tokenizer)
 
     def formatting_prompts_func(self, eos_token):
-        """Helper to format prompts for training."""
+        """Helper to format prompts."""
         def inner_formatting_prompts_func(examples):
-            inputs = examples["input"]
-            vocabulary = examples["vocabulary"]
-            labels = examples["label"] if "label" in examples else [""] * len(examples["input"])
-            tasks = [self.task] * len(examples["input"]) if "vocabulary" not in examples \
-                else [self.task.set_classes(v) for v in vocabulary]
-            texts = [
-                self.prompt_template.render(task=task, input=input, label=label) + eos_token
-                for input, label, task in zip(inputs, labels, tasks)
-            ]
+            data = {field: examples[field] for field in self.fields_required_in_dataset}            
+            texts = []
+            for i in range(len(examples[next(iter(examples))])): 
+                example_data = {field: data[field][i] for field in data}
+                example_data['eos_token'] = eos_token
+                if 'task' not in example_data:
+                    example_data['task'] = self.task
+                text = self.prompt_template.render(**example_data) + eos_token
+                texts.append(text)            
             print(f"Example prompt: {texts[0]}")
             return {"text": texts}
 
@@ -189,6 +200,7 @@ class UnslothFinetunedClassifier:
     
     @web_endpoint(method='POST')
     def inference_openai(self, request: ChatCompletionRequest):
+        """TODO: not currently working. Parameterized functions have no web endpoints."""
         results_dict = {"name": "test", "description": "test"}
         json_results_dict = json.dumps(results_dict)
         tool_calls = ChatCompletionMessageToolCall(id='1',
@@ -207,7 +219,7 @@ class UnslothFinetunedClassifier:
 
     def save_to_hub(self, model, tokenizer):
         """Save the model and tokenizer to Hugging Face's Model Hub."""
-        print(f"Saving model and tokenizer to {self.finetuned_model_name} with token {self.hf_access_token}.")
+        print(f"Saving model and tokenizer to {self.finetuned_model_name}.")
         model.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
         tokenizer.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
 
@@ -244,37 +256,28 @@ class UnslothFinetunedClassifier:
 
 if __name__ == "__main__":
     from modal.runner import deploy_app
-    from tasks import Classify, ClassifierClass
+    from tasks import Classify
 
     deploy_app(app)
 
     task = Classify(
         name="category",
-        description="The category of the input text.",
-        classes=[
-            ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
-            ClassifierClass(name="not furniture", description="Is the item not a piece of furniture"),
-        ]
+        description="The category of the input product."
     )
     
     finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
     base_model_name = "unsloth/llama-3-8b-bnb-4bit"
-    dataset = "mjrdbds/classifiers-finetuning-060525"
-
-    training_arguments = TrainingArguments()
-    training_peft_arguments = TrainingPeftArguments()
 
     classifier = UnslothFinetunedClassifier(
         finetuned_model_name=finetuned_model_name,
-        base_model_name=base_model_name
+        base_model_name=base_model_name,
     )
+    dataset_schema = classifier.set_task_prompt.remote(task=task, prompt_template_file="classification_jit_labels.jinja")
 
-    classifier.set_task_prompt.remote(task=task, prompt_template_file="classification_finetune.jinja")
-
+    dataset = "mjrdbds/classifiers-finetuning-060525"
     classifier.train.remote(dataset=dataset)
     result = classifier.inference.remote(dataset=dataset)
-    print(result)
-
+    
     ## The next day
     cls = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
     m1 = cls(finetuned_model_name=finetuned_model_name, base_model_name=base_model_name)

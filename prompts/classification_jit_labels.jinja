@@ -1,0 +1,8 @@
+Given an input label, submit your answer for this task. Return only a label, nothing else.
+<task>{{ task.name }} : {{ task.description }}.</task>
+Possible labels:
+{% for class in classes %}
+<label>"{{ class }}"</label>
+{% endfor %}
+input: {{ input }}
+label:{% if label %} {{ label }}{% endif %}
