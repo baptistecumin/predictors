@@ -174,20 +174,14 @@ class FineTunedPredictor(BaseModel):
         return self
 
     def predict(self, X):
-        if type(X) == List:
+        if isinstance(X, list):
             dataset = {'input': X}
-        elif type(X) == str:
+        elif isinstance(X, str):
             print('Interpreting X as a huggingface dataset str')
             dataset = X
+        else: 
+            print(type(X))
         return self.predictor.predict.remote(dataset=dataset)
-
-class FineTunedFewShotPredictor(BasePredictor):
-    pass
-
-class EmbeddingPredictor():
-    """
-    Prompted embeddings. Not currently used.
-    """
 
 if __name__ == "__main__":
     finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"

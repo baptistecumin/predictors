@@ -1,6 +1,8 @@
-from predictors import ZeroShotPredictor,FewShotTeacherPredictor, Predict, Classify, ClassifierClass, FineTunedPredictor
+from tasks import Predict, Classify, ClassifierClass
+from predictors import ZeroShotPredictor,FewShotTeacherPredictor, Predict, Classify, FineTunedPredictor
 
 if __name__ == "__main__":
+    # Option 1: multi-class labels, out of box models with zero shot or few shot teacher-student classifiers.
     tasks = [
         Predict(
             name="number_squared",
@@ -28,21 +30,28 @@ if __name__ == "__main__":
     print(cls.fit(X_train))
     print(cls.predict(X_test))
 
-    # ideal interface. note classifier only for now.
-    task = Classify(
-            name="category",
-            description="The category of the input text.",
-            classes=[
-                ClassifierClass(name="furniture", description="Is the item a piece of furniture"),
-                ClassifierClass(name="decorative", description="Is the item a decorative object"),
-            ]
-    )
-    X_train = ["table", "chair", "mirror"]
-    y_train = ["furniture", "furniture", "decorative"]
+    # Option 2: finetuned models. In memory dataset, or huggingface dataset.
+    finetuned_model_name = "mjrdbds/example-model"
+    base_model_name = "unsloth/llama-3-8b-bnb-4bit" # supports any unsloth variant
+    prompt_template_file = 'classification_labels.jinja'
+    tasks = [Classify(name="classify", description="Classify the category of the input")]
+    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
+    y = ["not furniture", "furniture"]
     cls = FineTunedPredictor(
         tasks=tasks,
-        model="unsloth/llama-3-8b-bnb-4bit",
-        hf_model_name="mjrdbds/llama3-4b-classifierunsloth-20240517-lora"
+        model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
+        base_model_name=base_model_name,
+        prompt_template_file=prompt_template_file,
     )
-    cls.train(X_train, y_train)
-    print(cls.predict(X_test))
+    cls.fit(X, y) # can also fit a huggingface dataset with cls.fit_hf(mjrdbds/classifiers-finetuning-060525)
+    print(cls.predict(X))
+
+    # Supports model persistence. The next day, boot up your model, it's still there.
+    cls = FineTunedPredictor(
+        tasks=tasks,
+        model="mjrdbds/llama3-4b-classifierunsloth-20240516-lora",
+        base_model_name=base_model_name,
+        prompt_template_file=prompt_template_file,
+    )
+    X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
+    print(cls.predict(X))
