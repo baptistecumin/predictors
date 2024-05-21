@@ -53,7 +53,7 @@ zipp==3.18.1
 datasets==2.19.1
 trl==0.8.6
 git+https://github.com/unslothai/unsloth.git
-bitsandbytes==0.43.1
+bitsandbytes>=0.42.1
 xformers>=0.0.25
 peft>=0.11.0
 modal>=0.62

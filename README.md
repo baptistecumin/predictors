@@ -12,7 +12,7 @@ Get state of the art text classification for 10% of LLM API prices, on demand, w
 ```bash
  git clone https://github.com/baptistecumin/predictors.git
  cd ./predictors
- pip install -r requirements.txt
+ pip3 install -r predictors/requirements.txt
  touch .env 
 ```
 Create an OPENAI_API_KEY, and a HUGGINGFACE_ACCESS_TOKEN. 
