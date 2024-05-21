@@ -9,9 +9,15 @@ Get state of the art text classification for 10% of LLM API prices, on demand, w
 
 ## Quickstart
 
-> pip install -r requirements.txt
+```bash
+ git clone https://github.com/baptistecumin/predictors.git
+ cd ./predictors
+ pip install -r requirements.txt
+ touch .env 
+```
+Create an OPENAI_API_KEY, and a HUGGINGFACE_ACCESS_TOKEN. 
 
-1. Run a simple classifier via API.  
+1. Run a simple classifier via API.
 ```python
 from predictors.predictors import ZeroShotPredictor
 from predictors.tasks import Predict, Classify, ClassifierClass
@@ -37,7 +43,7 @@ cls = ZeroShotPredictor(
 print(cls.predict(X))
 ```
 
-2. Finetune your own LLM classifier remotely via modal + unsloth. 
+2. Finetune your own LLM classifier remotely via Modal + Unsloth. 
 
 Set up Modal for remote training. 
 > modal setup
