@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "predictors"
+version = "0.1.0"
+description = "Finetune LLM text classifiers."
+readme = "README.md"
+requires-python = ">=3.6"
+dependencies = [
+    "modal>=0.62",
+    "bitsandbytes==0.43.1",
+    "xformers>=0.0.25",
+    "trl==0.8.6",
+    "datasets==2.19.1",
+    "instructor==1.2.4",
+    "Jinja2==3.1.3"
+]
+
+[project.optional-dependencies]
+gpu = [
+    "unsloth @ git+https://github.com/unslothai/unsloth.git"
+]
+
+[project.urls]
+homepage = "https://github.com/baptistecumin/predictors"
+repository = "https://github.com/baptistecumin/predictors"

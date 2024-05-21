@@ -1,14 +1,5 @@
-"""
-TODO: figure out how to push the whole package to modal, and import from there. 
- 
- Copied finetune_local.py with following modifications to run remotely.
-1. Save and load from volume instead of locally
-2. Imports via image.import, not local
-3. Modal function decorators 
-"""
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union 
-from modal import App, Image, method, Secret, Mount, web_endpoint, Volume, Cls
 import json
 import time
 import os
@@ -16,30 +7,15 @@ import dotenv
 from jinja2 import Environment, FileSystemLoader, meta
 from .tasks import Classify, ClassifierClass
 
-current_file_dir = os.path.dirname(os.path.realpath(__file__))
-image = (
-    Image
-    .debian_slim(python_version="3.10")
-    .apt_install("git", "git-lfs")
-    .pip_install("unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git")
-    .pip_install_from_requirements(os.path.join(current_file_dir, 'requirements.txt'))
-)
-volume = Volume.from_name("model-weights-vol", create_if_missing=True)
-app = App("train-peft", image=image)
-ROOT_PATH = "/predictors_output/"
+import torch
+from datasets import load_dataset, Dataset
+from trl import SFTTrainer
+from transformers import TrainingArguments as HFTrainingArguments
+dotenv.load_dotenv()
+
+ROOT_PATH = "./predictors_output/"
 MODEL_WEIGHTS_DIR = "model"
 TASKS_CONFIG_DIR = "tasks"
-dir_path = os.path.dirname(os.path.realpath(__file__))
-prompts_path = os.path.join(dir_path, 'prompts')
-
-with image.imports():
-    from unsloth import FastLanguageModel
-    import torch
-    from datasets import load_dataset, Dataset
-    from trl import SFTTrainer
-    from transformers import TrainingArguments as HFTrainingArguments
-
-dotenv.load_dotenv()
 
 @dataclass
 class TrainingArguments:
@@ -71,13 +47,6 @@ class TrainingPeftArguments:
     use_rslora: bool = False
     loftq_config: Optional[Dict] = None
 
-@app.cls(gpu='T4', 
-         container_idle_timeout=30, 
-         timeout=3000,
-         image=image, 
-         secrets=[Secret.from_dotenv()],
-         mounts=[Mount.from_local_dir(prompts_path, remote_path="/prompts")],
-         volumes={ROOT_PATH: volume})
 class UnslothFinetunedClassifier:
 
     def __init__(self, finetuned_model_name: str, base_model_name: str) -> None:
@@ -94,19 +63,18 @@ class UnslothFinetunedClassifier:
             if os.path.exists(self.model_weights_dir):
                 print('Weights exist. Initializing pre-configured model.')
                 self.model, self.tokenizer = self.load_from_volume()
-            else:
-                print('Weights do not exist yet. Please configure tasks, prompt and train.')
         else:
-            print("Could not find task and prompt config, please call set_config.")
-
-    @method()
-    def set_config(self, tasks: List, prompt_template_file: str) -> tuple:
+            print('Weights do not exist yet. Please configure tasks, prompt and train.')
+        
+    def set_config(self, tasks: List[Classify], prompt_template_file: str) -> tuple:
         """
         Configure the model with a task and a prompt template. Checks for the template in the local 'prompts' directory,
         falls back to the current directory, and saves the template content and tasks to the config directory for persistence.
         Done separately from init to make sure Modal container routing works.
         """
-        env = Environment(loader=FileSystemLoader('/prompts'))
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        prompts_path = os.path.join(dir_path, 'prompts')  # assumes prompts dir is in the same dir as this file
+        env = Environment(loader=FileSystemLoader(prompts_path))
         try:
             self.prompt_template = env.get_template(prompt_template_file)
         except TemplateNotFound:
@@ -130,7 +98,7 @@ class UnslothFinetunedClassifier:
             json.dump(config_data, f, indent=4)
         with open(f"{self.tasks_config_dir}/prompt_template_file.jinja", 'w') as f:
             f.write(template_source)
-        volume.commit()
+        
         return list(self.fields_required_in_train_dataset), list(self.fields_required_in_inference_dataset)
 
     def get_config(self) -> None:
@@ -139,12 +107,8 @@ class UnslothFinetunedClassifier:
             # Load configuration data from JSON file
             with open(f"{self.tasks_config_dir}/config.json", 'r') as f:
                 config_data = json.load(f)
-            for task_dict in config_data['tasks']: # type: ignore
-                if task_dict.get('task_type') == 'predict':
-                    task_dict['task'] = Predict(**task_dict)
-                else:
-                    task_dict['task'] = Classify(**task_dict)
-            self.tasks = [task_dict['task'] for task_dict in config_data['tasks'] if task_dict is not None]
+            
+            self.tasks = [Classify(**task_dict) for task_dict in config_data['tasks'] if task_dict is not None]
             self.fields_required_in_train_dataset = config_data['fields_required_in_train_dataset']
             self.fields_required_in_inference_dataset = config_data['fields_required_in_inference_dataset']
 
@@ -178,7 +142,6 @@ class UnslothFinetunedClassifier:
             return {"text": texts}
         return inner_formatting_prompts_func
     
-    @method()
     def fit(self, 
             X: List[str], 
             y: List[Dict[str, Union[str, int]]], 
@@ -186,7 +149,6 @@ class UnslothFinetunedClassifier:
         dataset = self.dataset_loader(dataset=X, y=y)
         return self._train(dataset, **kwargs)
 
-    @method()
     def train(self, 
               dataset: Union[str, Dict[str, Union[List[str], List[Dict[str, Union[str, int]]]]]],
               training_arguments: TrainingArguments = TrainingArguments(), 
@@ -202,7 +164,9 @@ class UnslothFinetunedClassifier:
                training_arguments: TrainingArguments = TrainingArguments(),
                training_peft_arguments: TrainingPeftArguments = TrainingPeftArguments()) -> None:
         """Train the base model. Dataset can either be a string, interpreted as a huggingface dataset, or a dict."""
-
+        import importlib
+        unsloth = importlib.import_module('unsloth')
+        FastLanguageModel = unsloth.FastLanguageModel
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.base_model_name,
             max_seq_length=2048,
@@ -250,17 +214,20 @@ class UnslothFinetunedClassifier:
         return dataset
 
     @staticmethod
-    def _predict(tokenizer, model: FastLanguageModel, prompts: List[str]) -> Dict[str, List[str]]:
+    def _predict(tokenizer, model, prompts: List[str]) -> Dict[str, List[str]]:
         print(type(tokenizer))
         inputs = tokenizer(prompts, padding=True, truncation=True, return_tensors="pt").to("cuda")
         outputs = model.generate(**inputs, max_new_tokens=10, use_cache=True)
         generated_texts = tokenizer.batch_decode(outputs[:,inputs['input_ids'].shape[1]:], skip_special_tokens=True)
         return {'predicted_label': generated_texts}
 
-    @method()
-    def predict(self, dataset) -> List[str]:
+    def predict(self, X) -> List[str]:
         """Run inference to classify input texts."""
-        dataset = self.dataset_loader(dataset, 'test')
+        import importlib
+        unsloth = importlib.import_module('unsloth')
+        FastLanguageModel = unsloth.FastLanguageModel
+
+        dataset = self.dataset_loader(X, 'test')
         missing_fields = [field for field in self.fields_required_in_inference_dataset if field not in dataset.column_names]
         if missing_fields:
             raise ValueError(f"Dataset is missing required fields: {missing_fields}. Found: {dataset.column_names}")
@@ -276,7 +243,7 @@ class UnslothFinetunedClassifier:
                 output[i] = None
         return output
         
-    def save_to_hub(self, model: FastLanguageModel, tokenizer) -> None:
+    def save_to_hub(self, model, tokenizer) -> None:
         """Save the model and tokenizer to Hugging Face's Model Hub."""
         print(f"Saving model and tokenizer to {self.finetuned_model_name}.")
         model.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
@@ -302,8 +269,6 @@ class UnslothFinetunedClassifier:
         )
         return model, tokenizer
 
-    def save_to_volume(self, model: FastLanguageModel, tokenizer) -> None:
+    def save_to_volume(self, model, tokenizer) -> None:
         model.save_pretrained(self.model_weights_dir)
         tokenizer.save_pretrained(self.model_weights_dir)
-        volume.commit()
-

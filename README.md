@@ -1,14 +1,20 @@
+## Predictors
+
+Finetuned text classifiers for the GPU lower classes.
+
+Get state of the art text classification for 10% of LLM API prices, on demand, with full control.
+- Finetune your own LLMs on 1 GPU for text classification using unsloth.
+- Laptops allowed: switch to remote GPU finetuning using Modal with one line of code. Persistently deploy in 1 line with Modal.
+- Full control: keep your models, export weights for VLLM / Ollama, set custom training params, bring your own finetuning data, bring your own prompts
+
 ## Quickstart
 
-Get state of the art text classification for 10% of LLM API prices.
-- Finetune your own LLMs for text classification with UnSloth's low memory quantized models.
-- Switch between local GPU development and remote finetuning using Modal with one line of code.
-- Keep your models: deploy with Modal, or export weights for VLLM / Ollama etc.
-- Fully customizable: bring your own prompts, your own finetuning data, export model weights. 
+> pip install -r requirements.txt
 
-1. Run a simple classifier 
+1. Run a simple classifier via API.  
 ```python
-from predictors.predictors import FewShotTeacherPredictor, Predict, Classify
+from predictors.predictors import ZeroShotPredictor
+from predictors.tasks import Predict, Classify, ClassifierClass
 tasks = [
     Predict(
         name="square",
@@ -16,28 +22,29 @@ tasks = [
         dtype='int'),
     Classify(
         name="is_prime",
-        description="Is this prime?",
+        description="Is this prime number?",
         classes=[
             ClassifierClass(name="yes", description="Yes"),
             ClassifierClass(name="no", description="No"),
         ]
     )        
 ]
-X_train = ["1", "2", "3", "3"]
-ZeroShotPredictor(
+X = ["1", "2", "3", "3"]
+cls = ZeroShotPredictor(
     tasks=tasks,
-    model="gpt-3.5-turbo",
-    teacher_model="gpt-4-turbo"
+    model="gpt-4o",
 )
+print(cls.predict(X))
 ```
 
-2. Finetune your own LLM classifier via modal + unsloth. Finetune 
+2. Finetune your own LLM classifier remotely via modal + unsloth. 
 
 Set up Modal for remote training. 
 > modal setup
 
 ```python
 from predictors.predictors import FineTunedPredictor
+from predictors.tasks import Classify, Predict
 finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
 base_model_name = "unsloth/llama-3-8b-bnb-4bit"
 n = FineTunedPredictor(
@@ -55,11 +62,11 @@ n.set_config(
 )
 X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
 y = [{'classify': 'not furniture', 'price': 5}, {'classify': 'furniture', 'price': 10}]
-n.fit(X, y)
+n.fit(X, y) # can also pass a huggingface dataset here, or config as in train_config.py
 print(n.predict(X))
 ```
 
-Predictors are saved locally or to a volume, they persist from one session to the next. 
+Predictors are saved locally or to a Modal volume. They are keyed by finetuned_model_name - base_model_name, and persist from one session to the next, reloading from disc.
 ```python
 from predictors.predictors import FineTunedPredictor
 finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"
@@ -71,5 +78,11 @@ n = FineTunedPredictor(
 )
 X = ["the product is not a piece of furniture", "the product is a piece of furniture"]
 y = [{'classify': 'not furniture', 'price': 5}, {'classify': 'furniture', 'price': 10}]
-print(n.predict(X))
+print(n.predict(X)) # no need to retrain.
 ```
+
+## Contribute
+
+This is a POC and an experiment. If you like the idea, DM [me](https://x.com/baptiste_cumin). 
+
+There's plenty of room to optimize this.

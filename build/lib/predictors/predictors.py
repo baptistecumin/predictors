@@ -170,19 +170,18 @@ class FineTunedPredictor(BaseModel):
             return self.predictor.set_config.remote(tasks, prompt_template_file)
         return self.predictor.set_config(tasks, prompt_template_file)
 
-    def fit(self, X, y=None, **kwargs):
+    def fit(self, X, y=None):
         """ 
         X can be an hf dataset, a list of input strings, a list of dicts.
-        See 
         """
         if y is not None:
             if self.remote:
-                return self.predictor.fit.remote(X, y, **kwargs)
-            return self.predictor.fit(X, y, **kwargs)
+                return self.predictor.fit.remote(X, y)
+            return self.predictor.fit(X, y)
         else: 
             if self.remote:
-                return self.predictor.fit.remote(X, **kwargs)
-            return self.predictor.fit(X, **kwargs)
+                return self.predictor.fit.remote(X)
+            return self.predictor.fit(X)
 
     def predict(self, X):
         if self.remote:

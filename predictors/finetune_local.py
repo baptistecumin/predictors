@@ -6,50 +6,16 @@ import os
 import dotenv
 from jinja2 import Environment, FileSystemLoader, meta
 from .tasks import Classify, ClassifierClass
-
-# with image.imports():
-    # pull out all imports here for non-local-finetuning
-from unsloth import FastLanguageModel
+from .train_config import TrainingArguments, TrainingPEFTArguments
 import torch
 from datasets import load_dataset, Dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments as HFTrainingArguments
-
 dotenv.load_dotenv()
 
 ROOT_PATH = "./predictors_output/"
 MODEL_WEIGHTS_DIR = "model"
 TASKS_CONFIG_DIR = "tasks"
-
-@dataclass
-class TrainingArguments:
-    per_device_eval_batch_size: int = 4
-    per_device_train_batch_size: int = 2
-    gradient_accumulation_steps: int = 4
-    warmup_steps: int = 5
-    max_steps: int = 60
-    learning_rate: float = 2e-4
-    bf16: bool = False 
-    fp16: bool = True
-    logging_steps: int = 1
-    optim: str = "adamw_8bit"
-    weight_decay: float = 0.01
-    lr_scheduler_type: str = "linear"
-    seed: int = 3407
-    output_dir: str = "outputs"
-
-@dataclass
-class TrainingPeftArguments:
-    r: int = 16
-    target_modules: List[str] = field(default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj",
-                                                               "gate_proj", "up_proj", "down_proj"])
-    lora_alpha: int = 16
-    lora_dropout: int = 0
-    bias: str = "none"
-    use_gradient_checkpointing: Union[bool, str] = "unsloth"
-    random_state: int = 3407
-    use_rslora: bool = False
-    loftq_config: Optional[Dict] = None
 
 class UnslothFinetunedClassifier:
 
@@ -168,7 +134,9 @@ class UnslothFinetunedClassifier:
                training_arguments: TrainingArguments = TrainingArguments(),
                training_peft_arguments: TrainingPeftArguments = TrainingPeftArguments()) -> None:
         """Train the base model. Dataset can either be a string, interpreted as a huggingface dataset, or a dict."""
-
+        import importlib
+        unsloth = importlib.import_module('unsloth')
+        FastLanguageModel = unsloth.FastLanguageModel
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.base_model_name,
             max_seq_length=2048,
@@ -216,7 +184,7 @@ class UnslothFinetunedClassifier:
         return dataset
 
     @staticmethod
-    def _predict(tokenizer, model: FastLanguageModel, prompts: List[str]) -> Dict[str, List[str]]:
+    def _predict(tokenizer, model, prompts: List[str]) -> Dict[str, List[str]]:
         print(type(tokenizer))
         inputs = tokenizer(prompts, padding=True, truncation=True, return_tensors="pt").to("cuda")
         outputs = model.generate(**inputs, max_new_tokens=10, use_cache=True)
@@ -225,6 +193,10 @@ class UnslothFinetunedClassifier:
 
     def predict(self, X) -> List[str]:
         """Run inference to classify input texts."""
+        import importlib
+        unsloth = importlib.import_module('unsloth')
+        FastLanguageModel = unsloth.FastLanguageModel
+
         dataset = self.dataset_loader(X, 'test')
         missing_fields = [field for field in self.fields_required_in_inference_dataset if field not in dataset.column_names]
         if missing_fields:
@@ -241,7 +213,7 @@ class UnslothFinetunedClassifier:
                 output[i] = None
         return output
         
-    def save_to_hub(self, model: FastLanguageModel, tokenizer) -> None:
+    def save_to_hub(self, model, tokenizer) -> None:
         """Save the model and tokenizer to Hugging Face's Model Hub."""
         print(f"Saving model and tokenizer to {self.finetuned_model_name}.")
         model.push_to_hub(self.finetuned_model_name, token=self.hf_access_token)
@@ -267,6 +239,6 @@ class UnslothFinetunedClassifier:
         )
         return model, tokenizer
 
-    def save_to_volume(self, model: FastLanguageModel, tokenizer) -> None:
+    def save_to_volume(self, model, tokenizer) -> None:
         model.save_pretrained(self.model_weights_dir)
         tokenizer.save_pretrained(self.model_weights_dir)
