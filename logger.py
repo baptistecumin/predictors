@@ -1,11 +1,9 @@
 import logging
 import sys
-#logging.basicConfig(level=logging.DEBUG)
 
 def get_logger():
-    # Create a logger object
-    logger = logging.getLogger('classifiers')
-    logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all levels of logs
+    logger = logging.getLogger('predictors')
+    logger.setLevel(logging.DEBUG)  
 
     # Create handlers for different logging levels
     info_handler = logging.StreamHandler(sys.stdout)

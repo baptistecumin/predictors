@@ -1,25 +1,25 @@
-"""
-TODO: allow for finetuning on multiple tasks at once. Separate answers by <task>key:value</task>
-"""
 from modal.runner import deploy_app
 from modal import Cls
-from tasks import Classify
 from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field, create_model
 from typing import Optional, Type, Literal, Union, List, Any
-from tasks import InputData, TrainExample, Classify, Predict, PromptTemplate
-from finetune import app
 import instructor
 from litellm import completion
-import logger
 import dotenv
 dotenv.load_dotenv()
 
-from jinja2 import Environment, FileSystemLoader
-template_dir = './prompts'
-env = Environment(loader=FileSystemLoader(template_dir))
+from .logger import get_logger
+from .tasks import InputData, TrainExample, Classify, Predict, PromptTemplate
+from .finetune_modal import app
+from .finetune_local import UnslothFinetunedClassifier
 
-logger = logger.get_logger()
+from jinja2 import Environment, FileSystemLoader
+def load_prompts_jinja_env():
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    prompts_path = os.path.join(dir_path, 'prompts')  # assumes prompts dir is in the same dir as this file
+    env = Environment(loader=FileSystemLoader(prompts_path))
+    return env
+logger = get_logger()
 
 class BasePredictor(ABC, BaseModel):
     model: str = Field(..., description="The model identifier used for predictions.")
@@ -45,6 +45,8 @@ class BasePredictor(ABC, BaseModel):
                 prediction_object_fields[task.name] = (class_labels_type, Field(..., description=task.description))
             if task.chain_of_thought:
                 prediction_object_fields["chain_of_thought"] = ("str", Field(..., description=f"Think step by step to determine the correct {task.name}"))
+        
+        env = load_prompts_jinja_env()
         task_prompt_template = env.get_template(self.task_prompt_template_file) if self.task_prompt_template_file else None
         self.response_model = create_model(
             __model_name='Labels', 
@@ -145,43 +147,45 @@ class FewShotTeacherPredictor(BasePredictor):
         return outputs
 
 class FineTunedPredictor(BaseModel): 
-    """ TODO how do we merge this with the BasePredictor?"""
     base_model_name: str
     model: str = Field(..., description="The model identifier used for predictions.")
-    tasks: List[Union[Classify, Predict]] = Field(..., description="A list of tasks that the predictor handles.")
+    remote: bool = Field(..., description="Whether the model is deployed remotely to modal or trained locally.")
 
-    prompt_template_file: str = Field(..., description="File path to the user prompt template, deployed remotely to modal.")
-    predictor: Any = Field(None, description="The model object deployed remotely to modal.")
+    tasks: List[Union[Classify, Predict]] = Field([], description="A list of tasks that the predictor handles.")
+    prompt_template_file: str = Field("", description="File path to the user prompt template, deployed remotely to modal.")
+    predictor: Any = Field(None, description="Set internally. The model object deployed remotely to modal.")
 
     def model_post_init(self, __context) -> None:
-        # how do we know if we should deploy the app or not? If it's initializing for the first time?
-        deploy_app(app)
-        cls = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
-        self.predictor = cls(finetuned_model_name=self.model, base_model_name=self.base_model_name)
-        required_dataset_fields = self.predictor.set_task_prompt.remote(task=self.tasks[0], prompt_template_file=self.prompt_template_file)
-        print("Required dataset fields: ", required_dataset_fields)
+        if self.remote:
+            deploy_app(app)
+            cls = Cls.lookup("train-peft", "UnslothFinetunedClassifier")
+            self.predictor = cls(finetuned_model_name=self.model, base_model_name=self.base_model_name)
+        else:
+            self.predictor = UnslothFinetunedClassifier(finetuned_model_name=self.model, base_model_name=self.base_model_name)
 
-    def fit(self, X, y):
-        if len(self.tasks) > 1:
-            raise NotImplementedError("Only one task supported for now.")
-        self.predictor.set_task_prompt.remote(task=self.tasks[0], prompt_template_file=self.prompt_template_file)
-        dataset_dict = {'input': X, 'label': y}
-        self.predictor.train.remote(dataset=dataset_dict)
-        return self       
-    
-    def fit_hf(self, dataset):
-        self.predictor.train.remote(dataset=dataset)
-        return self
+    def set_config(self, tasks: List[Union[Classify, Predict]], prompt_template_file: str):
+        if self.remote:
+            return self.predictor.set_config.remote(tasks, prompt_template_file)
+        return self.predictor.set_config(tasks, prompt_template_file)
+
+    def fit(self, X, y=None):
+        """ 
+        X can be an hf dataset, a list of input strings, a list of dicts.
+        """
+        if y is not None:
+            if self.remote:
+                return self.predictor.fit.remote(X, y)
+            return self.predictor.fit(X, y)
+        else: 
+            if self.remote:
+                return self.predictor.fit.remote(X)
+            return self.predictor.fit(X)
 
     def predict(self, X):
-        if isinstance(X, list):
-            dataset = {'input': X}
-        elif isinstance(X, str):
-            print('Interpreting X as a huggingface dataset str')
-            dataset = X
-        else: 
-            print(type(X))
-        return self.predictor.predict.remote(dataset=dataset)
+        if self.remote:
+            return self.predictor.predict.remote(X)
+        return self.predictor.predict(X)
+
 
 if __name__ == "__main__":
     finetuned_model_name = "mjrdbds/llama3-4b-classifierunsloth-20240516-lora"

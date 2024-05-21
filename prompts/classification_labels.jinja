@@ -1,8 +1,23 @@
-Given an input label, submit your answer for this task. Return only a label, nothing else.
-<task>{{ task.name }} : {{ task.description }}.</task>
-Possible labels:
-{% for class in task.classes %}
-<label>"{{ class.name }}" {% if class.description %}: {{ class.description }}{% endif %}</label>
-{% endfor %}
-input: {{ input }}
-label:{% if label %} {{ label }}{% endif %}
+Given an input label, submit your answer for this task. Return a JSON mapping a label name to your prediction, nothing else.
+"tasks": [
+    {%- for task in tasks %}
+    {{ task.name }} : {{ task.description }}.,
+    {%- if task.classes is defined and task.classes %}
+    "classes": [ 
+        {%- for class in task.classes %}
+        "{{ class.name }}" {% if class.description %}: "{{ class.description }}" {% endif %}
+        {%- if not loop.last %}, {% endif %}
+        {%- endfor %}
+    ]{%- endif %}
+    {%- if not loop.last %}, {% endif %}
+    {%- endfor %}
+],
+"input": "{{ input }}",
+"labels": {%- if labels %}
+    {
+    {%- for key, value in labels.items() %}
+        "{{ key }}": "{{ value }}"
+        {%- if not loop.last %}, {% endif %}
+    {%- endfor %}
+    }
+{%- endif %}
