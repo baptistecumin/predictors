@@ -1,10 +1,10 @@
 ## Quickstart
 
-Use LLMs as text classifiers. 
-
-Finetune your own LLMs for text classification.
-
-Run them locally, or remotely. Get SOTA performance for 1/10th the cost of APIs.
+Get state of the art text classification for 10% of LLM API prices.
+- Finetune your own LLMs for text classification with UnSloth's low memory quantized models.
+- Switch between local GPU development and remote finetuning using Modal with one line of code.
+- Keep your models: deploy with Modal, or export weights for VLLM / Ollama etc.
+- Fully customizable: bring your own prompts, your own finetuning data, export model weights. 
 
 1. Run a simple classifier 
 ```python
